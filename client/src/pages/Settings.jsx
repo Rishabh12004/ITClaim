@@ -7,23 +7,31 @@ import axios from 'axios';
 export default function Settings() {
   const { user, updateUser } = useAuth();
   const [form, setForm] = useState({
-    name: user?.name || '',
-    email: user?.email || '',
+    name:         user?.name         || '',
+    email:        user?.email        || '',
     businessName: user?.businessName || '',
-    gstin: user?.gstin || '',
+    gstin:        user?.gstin        || '',
   });
+  // V2 — email reminder preference (default true, matches User model default)
+  const [emailReminders, setEmailReminders] = useState(
+    user?.emailReminders !== undefined ? user.emailReminders : true
+  );
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState('');
+  const [saved,  setSaved]  = useState(false);
+  const [error,  setError]  = useState('');
+  // V2 — separate saving state for the reminders toggle so it saves independently
+  const [savingReminders, setSavingReminders] = useState(false);
 
   useEffect(() => {
     if (user) {
       setForm({
-        name: user.name || '',
-        email: user.email || '',
+        name:         user.name         || '',
+        email:        user.email        || '',
         businessName: user.businessName || '',
-        gstin: user.gstin || '',
+        gstin:        user.gstin        || '',
       });
+      // Sync toggle from server whenever user object refreshes
+      if (user.emailReminders !== undefined) setEmailReminders(user.emailReminders);
     }
   }, [user]);
 
@@ -35,7 +43,8 @@ export default function Settings() {
     setSaved(false);
     setError('');
     try {
-      const res = await axios.put('/auth/profile', form);
+      // V2 — also persist emailReminders alongside profile fields
+      const res = await axios.put('/auth/profile', { ...form, emailReminders });
       updateUser(res.data.user);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
@@ -43,6 +52,22 @@ export default function Settings() {
       setError(err.response?.data?.message || 'Failed to save settings.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  // V2 — Save just the reminder toggle immediately when flipped (no need to hit Save)
+  const handleToggleReminders = async (checked) => {
+    setEmailReminders(checked);
+    setSavingReminders(true);
+    try {
+      const res = await axios.put('/auth/profile', { ...form, emailReminders: checked });
+      updateUser(res.data.user);
+    } catch (err) {
+      // Revert toggle on failure
+      setEmailReminders(!checked);
+      console.error('Failed to save reminder preference:', err.message);
+    } finally {
+      setSavingReminders(false);
     }
   };
 
@@ -169,6 +194,75 @@ export default function Settings() {
           <p style={{ marginTop: 12, fontSize: 12, color: 'var(--text-muted)' }}>
             * Deadlines may be extended by the GSTN portal. Always check the official GST portal for the latest dates.
           </p>
+        </div>
+
+        {/* V2 — Email Reminders toggle */}
+        <div className="card" style={{ marginTop: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(0,212,170,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-green)' }}>
+              <Bell size={18} />
+            </div>
+            <h2 style={{ fontFamily: 'Space Grotesk', fontSize: 16, fontWeight: 600 }}>🔔 Email Reminders</h2>
+          </div>
+
+          <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 20 }}>
+            Get an email reminder before GST filing deadlines when you have claimable ITC to recover.
+          </p>
+
+          {/* Toggle row */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            padding: '14px 16px', borderRadius: 8, background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-primary)', marginBottom: 3 }}>Deadline Reminders</div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
+                Sent at 9 AM on the 13th (7 days before) and 18th (2 days before) of every month
+              </div>
+            </div>
+
+            {/* iOS-style toggle switch */}
+            <label style={{ position: 'relative', display: 'inline-block', width: 44, height: 24, flexShrink: 0, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                id="email-reminders-toggle"
+                checked={emailReminders}
+                onChange={e => handleToggleReminders(e.target.checked)}
+                disabled={savingReminders}
+                style={{ opacity: 0, width: 0, height: 0 }}
+              />
+              <span style={{
+                position: 'absolute', cursor: 'pointer', inset: 0,
+                background: emailReminders ? 'var(--accent-green)' : 'var(--border)',
+                borderRadius: 24,
+                transition: 'background 0.2s ease',
+                opacity: savingReminders ? 0.6 : 1,
+              }}>
+                <span style={{
+                  position: 'absolute',
+                  left: emailReminders ? 22 : 2,
+                  top: 2,
+                  width: 20, height: 20,
+                  borderRadius: '50%',
+                  background: '#fff',
+                  transition: 'left 0.2s ease',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                }} />
+              </span>
+            </label>
+          </div>
+
+          {/* Destination email display */}
+          <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-secondary)' }}>
+            {emailReminders ? (
+              <span>
+                ✅ Reminders will be sent to{' '}
+                <strong style={{ color: 'var(--text-primary)', fontFamily: 'JetBrains Mono', fontSize: 11 }}>
+                  {user?.email}
+                </strong>
+              </span>
+            ) : (
+              <span style={{ color: 'var(--text-muted)' }}>🔕 Email reminders are turned off.</span>
+            )}
+          </div>
         </div>
 
         {/* Account danger zone */}

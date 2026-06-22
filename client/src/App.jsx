@@ -8,6 +8,7 @@ import Expenses from './pages/Expenses';
 import Scanner from './pages/Scanner';
 import Report from './pages/Report';
 import Settings from './pages/Settings';
+import Reconcile from './pages/Reconcile'; // V2
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -39,7 +40,8 @@ function AppRoutes() {
       <Route path="/expenses" element={<ProtectedRoute><Expenses /></ProtectedRoute>} />
       <Route path="/scanner" element={<ProtectedRoute><Scanner /></ProtectedRoute>} />
       <Route path="/report" element={<ProtectedRoute><Report /></ProtectedRoute>} />
-      <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+      <Route path="/settings"   element={<ProtectedRoute><Settings />  </ProtectedRoute>} />
+      <Route path="/reconcile"  element={<ProtectedRoute><Reconcile /> </ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

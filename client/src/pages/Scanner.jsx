@@ -1,20 +1,25 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback } from 'react';
 import Navbar from '../components/Navbar';
 import { useDropzone } from 'react-dropzone';
-import { Upload, FileText, Loader2, CheckCircle, X, Zap, AlertTriangle } from 'lucide-react';
+import { Upload, FileText, CheckCircle, X, Zap, AlertTriangle, Brain } from 'lucide-react';
 import { checkITCEligibility } from '../utils/itcRules';
 import ITCBadge from '../components/ITCBadge';
 import axios from 'axios';
 
 export default function Scanner() {
-  const [file, setFile] = useState(null);
-  const [preview, setPreview] = useState(null);
-  const [scanning, setScanning] = useState(false);
-  const [scanResult, setScanResult] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [form, setForm] = useState({ vendorName: '', amount: '', gstPaid: '', category: 'other', invoiceDate: '' });
-  const [error, setError] = useState('');
+  const [file,        setFile]        = useState(null);
+  const [preview,     setPreview]     = useState(null);
+  const [scanning,    setScanning]    = useState(false);
+  const [scanPhase,   setScanPhase]   = useState(''); // 'ocr' | 'ai' | ''
+  const [scanResult,  setScanResult]  = useState(null);
+  const [saving,      setSaving]      = useState(false);
+  const [saved,       setSaved]       = useState(false);
+  const [form,        setForm]        = useState({
+    vendorName: '', amount: '', gstPaid: '', category: 'other',
+    invoiceDate: '', vendorGstin: '',
+  });
+  const [error,       setError]       = useState('');
+  const [aiUsed,      setAiUsed]      = useState(false); // Was the LLM parse successful?
 
   const onDrop = useCallback((acceptedFiles) => {
     const f = acceptedFiles[0];
@@ -23,7 +28,7 @@ export default function Scanner() {
     setScanResult(null);
     setSaved(false);
     setError('');
-
+    setAiUsed(false);
     const url = URL.createObjectURL(f);
     setPreview(url);
   }, []);
@@ -39,29 +44,39 @@ export default function Scanner() {
     if (!file) return;
     setScanning(true);
     setError('');
+    setAiUsed(false);
 
     try {
-      // Dynamic import for Tesseract to keep bundle lean
+      // ── Step 1: Tesseract OCR — extract raw text from the image ──────────
+      setScanPhase('ocr');
       const Tesseract = await import('tesseract.js');
       const { data: { text } } = await Tesseract.default.recognize(file, 'eng', {
-        logger: m => console.log(m),
+        logger: m => console.log('[OCR]', m),
       });
 
-      // Parse the text for vendor, amount, GST
-      const parsed = parseInvoiceText(text);
+      // ── Step 2: LLM parsing — send raw text to Claude for structured extraction ──
+      setScanPhase('ai');
+      const parsed = await parseInvoiceText(text);
+
+      const usedAI = !!(parsed._aiParsed);
+      setAiUsed(usedAI);
+      delete parsed._aiParsed; // internal flag, don't leak into form
+
       setScanResult({ rawText: text, ...parsed });
       setForm(f => ({
         ...f,
-        vendorName: parsed.vendorName || f.vendorName,
-        amount: parsed.amount || f.amount,
-        gstPaid: parsed.gstAmount || f.gstPaid,
-        invoiceDate: parsed.date || f.invoiceDate,
+        vendorName:  parsed.vendorName  || f.vendorName,
+        amount:      parsed.amount      || f.amount,
+        gstPaid:     parsed.gstAmount   || f.gstPaid,
+        invoiceDate: parsed.date        || f.invoiceDate,
+        vendorGstin: parsed.vendorGSTIN || f.vendorGstin,
       }));
     } catch (err) {
-      console.error('OCR error:', err);
-      setError('OCR scanning failed. Please fill in the details manually.');
+      console.error('Scan error:', err);
+      setError('Scanning failed. Please fill in the details manually.');
     } finally {
       setScanning(false);
+      setScanPhase('');
     }
   };
 
@@ -78,15 +93,17 @@ export default function Scanner() {
     setError('');
     try {
       const textToCheck = form.vendorName + ' ' + (scanResult?.rawText || '');
-      const itc = checkITCEligibility(textToCheck, form.category);
+      const itc    = checkITCEligibility(textToCheck, form.category);
       const gstAmt = form.gstPaid || Math.round(parseFloat(form.amount) * 0.18).toString();
       await axios.post('/expenses', {
         ...form,
-        amount: parseFloat(form.amount),
-        gstPaid: parseFloat(gstAmt),
-        itcStatus: itc.status,
-        itcReason: itc.reason,
-        confidence: itc.confidence,
+        amount:         parseFloat(form.amount),
+        gstPaid:        parseFloat(gstAmt),
+        itcStatus:      itc.status,
+        itcReason:      itc.reason,
+        confidence:     itc.confidence,
+        vendorGstin:    form.vendorGstin.trim().toUpperCase() || undefined,
+        vendorCompliant: 'unknown', // scanner flow skips live GSTIN check; user can verify separately
       });
       setSaved(true);
     } catch (err) {
@@ -101,12 +118,20 @@ export default function Scanner() {
     setPreview(null);
     setScanResult(null);
     setSaved(false);
-    setForm({ vendorName: '', amount: '', gstPaid: '', category: 'other', invoiceDate: '' });
+    setAiUsed(false);
+    setForm({ vendorName: '', amount: '', gstPaid: '', category: 'other', invoiceDate: '', vendorGstin: '' });
     setError('');
   };
 
   const textToCheck = form.vendorName + ' ' + (scanResult?.rawText || '');
-  const itcPreview = form.vendorName.length > 2 ? checkITCEligibility(textToCheck, form.category) : null;
+  const itcPreview  = form.vendorName.length > 2 ? checkITCEligibility(textToCheck, form.category) : null;
+
+  // Scanning phase label shown on the button
+  const scanningLabel = scanPhase === 'ocr'
+    ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Reading image with OCR...</>
+    : scanPhase === 'ai'
+    ? <><Brain size={14} /> 🧠 Reading invoice with AI...</>
+    : <><span className="spinner" style={{ width: 14, height: 14 }} /> Processing...</>;
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh' }}>
@@ -115,12 +140,14 @@ export default function Scanner() {
 
         <div style={{ marginBottom: 28 }}>
           <h1 style={{ fontFamily: 'Space Grotesk', fontSize: 24, fontWeight: 700, marginBottom: 4 }}>Invoice Scanner</h1>
-          <p style={{ color: 'var(--text-secondary)', fontSize: 14 }}>Upload an invoice image and we'll extract the details automatically</p>
+          <p style={{ color: 'var(--text-secondary)', fontSize: 14 }}>
+            Upload an invoice image — Tesseract OCR reads it, then AI extracts the details
+          </p>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 20, maxWidth: 960 }}>
 
-          {/* Upload area */}
+          {/* ── Upload area ── */}
           <div className="card">
             <h2 style={{ fontFamily: 'Space Grotesk', fontSize: 16, fontWeight: 600, marginBottom: 16 }}>
               <Upload size={16} style={{ display: 'inline', marginRight: 8 }} />
@@ -143,33 +170,43 @@ export default function Scanner() {
               <div>
                 {preview && file.type.startsWith('image/') && (
                   <div style={{ position: 'relative', marginBottom: 12 }}>
-                    <img src={preview} alt="Invoice preview" style={{ width: '100%', borderRadius: 8, border: '1px solid var(--border)', maxHeight: 300, objectFit: 'contain', background: '#fff' }} />
-                    <button onClick={reset} style={{ position: 'absolute', top: 8, right: 8, background: 'rgba(0,0,0,0.6)', border: 'none', borderRadius: '50%', width: 24, height: 24, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>
+                    <img src={preview} alt="Invoice preview" style={{
+                      width: '100%', borderRadius: 8, border: '1px solid var(--border)',
+                      maxHeight: 300, objectFit: 'contain', background: '#fff',
+                    }} />
+                    <button onClick={reset} style={{
+                      position: 'absolute', top: 8, right: 8, background: 'rgba(0,0,0,0.6)',
+                      border: 'none', borderRadius: '50%', width: 24, height: 24, cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
+                    }}>
                       <X size={14} />
                     </button>
                   </div>
                 )}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 8, background: 'var(--bg-elevated)', border: '1px solid var(--border)', marginBottom: 12 }}>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
+                  borderRadius: 8, background: 'var(--bg-elevated)', border: '1px solid var(--border)', marginBottom: 12,
+                }}>
                   <FileText size={16} style={{ color: 'var(--accent-green)' }} />
                   <span style={{ fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</span>
                   <button onClick={reset} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}><X size={14} /></button>
                 </div>
 
                 {!scanResult && (
-                  <button id="scan-btn" onClick={scanInvoice} className="btn-primary" style={{ width: '100%', justifyContent: 'center' }} disabled={scanning}>
-                    {scanning ? (
-                      <><span className="spinner" style={{ width: 14, height: 14 }} /> Scanning with OCR...</>
-                    ) : (
-                      <><Zap size={15} /> Scan Invoice</>
-                    )}
+                  <button id="scan-btn" onClick={scanInvoice} className="btn-primary"
+                    style={{ width: '100%', justifyContent: 'center' }} disabled={scanning}>
+                    {scanning ? scanningLabel : <><Zap size={15} /> Scan Invoice</>}
                   </button>
                 )}
 
                 {scanResult && (
-                  <div style={{ padding: '10px 12px', borderRadius: 8, background: 'rgba(0,212,170,0.07)', border: '1px solid rgba(0,212,170,0.2)', fontSize: 12 }}>
+                  <div style={{
+                    padding: '10px 12px', borderRadius: 8, fontSize: 12,
+                    background: 'rgba(0,212,170,0.07)', border: '1px solid rgba(0,212,170,0.2)',
+                  }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--accent-green)', fontWeight: 600, marginBottom: 4 }}>
                       <CheckCircle size={14} />
-                      Scan complete! Fields auto-filled.
+                      {aiUsed ? '🧠 AI extracted details — please verify before saving' : 'Scan complete! Fields auto-filled.'}
                     </div>
                     <div style={{ color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: 10, lineHeight: 1.4, maxHeight: 60, overflow: 'hidden' }}>
                       {scanResult.rawText?.slice(0, 200)}...
@@ -180,7 +217,7 @@ export default function Scanner() {
             )}
           </div>
 
-          {/* Form */}
+          {/* ── Expense details form ── */}
           <div className="card">
             <h2 style={{ fontFamily: 'Space Grotesk', fontSize: 16, fontWeight: 600, marginBottom: 16 }}>
               Expense Details
@@ -216,28 +253,43 @@ export default function Scanner() {
                 )}
 
                 <Field label="Vendor Name *">
-                  <input id="scanner-vendor" name="vendorName" value={form.vendorName} onChange={handleFormChange} placeholder="Airtel, AWS, Figma..." className="input-field" />
+                  <input id="scanner-vendor" name="vendorName" value={form.vendorName} onChange={handleFormChange}
+                    placeholder="Airtel, AWS, Figma..." className="input-field" />
                 </Field>
+
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                   <Field label="Amount (₹) *">
-                    <input id="scanner-amount" name="amount" type="number" value={form.amount} onChange={handleFormChange} placeholder="5000" className="input-field" />
+                    <input id="scanner-amount" name="amount" type="number" value={form.amount}
+                      onChange={handleFormChange} placeholder="5000" className="input-field" />
                   </Field>
                   <Field label="GST Paid (₹)">
-                    <input id="scanner-gst" name="gstPaid" type="number" value={form.gstPaid} onChange={handleFormChange} placeholder="900" className="input-field" />
+                    <input id="scanner-gst" name="gstPaid" type="number" value={form.gstPaid}
+                      onChange={handleFormChange} placeholder="900" className="input-field" />
                   </Field>
                 </div>
+
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                   <Field label="Category">
-                    <select id="scanner-category" name="category" value={form.category} onChange={handleFormChange} className="input-field">
+                    <select id="scanner-category" name="category" value={form.category}
+                      onChange={handleFormChange} className="input-field">
                       {['internet','software','hardware','cloud','office','professional','marketing','travel','food','other'].map(c =>
                         <option key={c} value={c}>{c.charAt(0).toUpperCase()+c.slice(1)}</option>
                       )}
                     </select>
                   </Field>
                   <Field label="Invoice Date">
-                    <input id="scanner-date" name="invoiceDate" type="date" value={form.invoiceDate} onChange={handleFormChange} className="input-field" />
+                    <input id="scanner-date" name="invoiceDate" type="date" value={form.invoiceDate}
+                      onChange={handleFormChange} className="input-field" />
                   </Field>
                 </div>
+
+                {/* V2 — Vendor GSTIN auto-populated from AI scan */}
+                <Field label="Vendor GSTIN (auto-detected)">
+                  <input id="scanner-gstin" name="vendorGstin" value={form.vendorGstin}
+                    onChange={handleFormChange} placeholder="e.g. 27AAPFU0939F1ZV"
+                    className="input-field" maxLength={15}
+                    style={{ textTransform: 'uppercase', letterSpacing: '0.05em' }} />
+                </Field>
 
                 {error && (
                   <div style={{ padding: '8px 12px', borderRadius: 6, background: 'rgba(255,77,77,0.1)', border: '1px solid rgba(255,77,77,0.2)', fontSize: 13, color: 'var(--accent-red)', display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -245,7 +297,8 @@ export default function Scanner() {
                   </div>
                 )}
 
-                <button id="scanner-save" onClick={handleSave} className="btn-primary" style={{ width: '100%', justifyContent: 'center' }} disabled={saving}>
+                <button id="scanner-save" onClick={handleSave} className="btn-primary"
+                  style={{ width: '100%', justifyContent: 'center' }} disabled={saving}>
                   {saving ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Saving...</> : '✓ Save Expense'}
                 </button>
               </div>
@@ -284,26 +337,62 @@ function Field({ label, children }) {
   );
 }
 
-function parseInvoiceText(text) {
+// ── V2: LLM-powered invoice parser (primary) ────────────────────────────────
+// Sends the raw OCR text to Claude claude-sonnet-4-6 via the Anthropic API.
+// Returns a structured object with vendorName, amount, gstAmount, date, vendorGSTIN.
+// Sets _aiParsed: true on success so the UI can show the AI-verified banner.
+async function parseInvoiceText(rawText) {
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 500,
+        messages: [{
+          role: 'user',
+          content: `Extract information from this Indian GST invoice text. Return ONLY a JSON object with these exact keys:
+{
+  "vendorName": "company name that issued the invoice",
+  "amount": "base amount as number string without GST, without rupee symbol",
+  "gstAmount": "total GST amount as number string (CGST+SGST or IGST combined)",
+  "date": "date in YYYY-MM-DD format",
+  "vendorGSTIN": "vendor GSTIN if found, else empty string"
+}
+If a field cannot be found, use empty string. Do not include any explanation or markdown.
+
+Invoice text:
+${rawText}`,
+        }],
+      }),
+    });
+
+    const data = await response.json();
+    const text = data?.content?.[0]?.text?.trim() || '';
+    const clean = text.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(clean);
+    return { ...parsed, _aiParsed: true };
+
+  } catch (err) {
+    console.warn('LLM parse failed — falling back to regex:', err.message);
+    return parseInvoiceTextFallback(rawText);
+  }
+}
+
+// ── Fallback: original regex-based parser (used if LLM call fails) ──────────
+function parseInvoiceTextFallback(text) {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-  
-  // Try to extract vendor (usually first few lines)
+
   let vendorName = '';
   for (let i = 0; i < Math.min(5, lines.length); i++) {
     if (lines[i].length > 3 && lines[i].length < 70 && !/^\d/.test(lines[i])) {
-      // Clean up messy vendor names by removing common invoice words
       let name = lines[i].replace(/tax invoice|bill of supply|cash memo|invoice|receipt/ig, '').trim();
-      name = name.replace(/[\/\-\|\:\~]+$/g, '').trim(); // Remove trailing punctuation
-      if (name.length > 2) {
-        vendorName = name;
-        break;
-      }
+      name = name.replace(/[\/\-\|:\~]+$/g, '').trim();
+      if (name.length > 2) { vendorName = name; break; }
     }
   }
 
-  // Try to extract amount (look for patterns like ₹, Rs., Total, Amount)
-  let amount = '';
-  let gstAmount = '';
+  let amount = '', gstAmount = '';
   const amountPatterns = [
     /(?:total|amount|grand total|bill amount)[:\s]+(?:₹|rs\.?|inr)?\s*([0-9,]+(?:\.\d{2})?)/i,
     /(?:₹|rs\.?)\s*([0-9,]+(?:\.\d{2})?)/i,
@@ -312,43 +401,27 @@ function parseInvoiceText(text) {
     /(?:gst|igst|cgst\s*\+\s*sgst|tax)[:\s]+(?:₹|rs\.?|inr)?\s*([0-9,]+(?:\.\d{2})?)/i,
     /(?:18%|gst @\s*18)[:\s]+(?:₹|rs\.?|inr)?\s*([0-9,]+(?:\.\d{2})?)/i,
   ];
+  for (const p of amountPatterns) { const m = text.match(p); if (m) { amount    = m[1].replace(/,/g, ''); break; } }
+  for (const p of gstPatterns)    { const m = text.match(p); if (m) { gstAmount = m[1].replace(/,/g, ''); break; } }
 
-  for (const pattern of amountPatterns) {
-    const m = text.match(pattern);
-    if (m) { amount = m[1].replace(/,/g, ''); break; }
-  }
-  for (const pattern of gstPatterns) {
-    const m = text.match(pattern);
-    if (m) { gstAmount = m[1].replace(/,/g, ''); break; }
-  }
-
-  // Try to extract date
   let date = '';
   const datePatterns = [
     /(\d{2})[\/\-\.](\d{2})[\/\-\.](\d{4})/,
     /(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{4})/i,
   ];
-  for (const pattern of datePatterns) {
-    const m = text.match(pattern);
+  for (const p of datePatterns) {
+    const m = text.match(p);
     if (m) {
-      if (pattern === datePatterns[0]) {
-        // Handle DD.MM.YYYY or DD/MM/YYYY
-        let day = parseInt(m[1], 10);
-        let month = parseInt(m[2], 10);
-        // If month > 12, it must be MM/DD/YYYY format, so swap them
-        if (month > 12 && day <= 12) {
-          const temp = day; day = month; month = temp;
-        }
-        date = `${m[3]}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      if (p === datePatterns[0]) {
+        let day = parseInt(m[1], 10), month = parseInt(m[2], 10);
+        if (month > 12 && day <= 12) { const t = day; day = month; month = t; }
+        date = `${m[3]}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
       } else {
-        try {
-          const d = new Date(m[0]);
-          if (!isNaN(d)) date = d.toISOString().split('T')[0];
-        } catch {}
+        try { const d = new Date(m[0]); if (!isNaN(d)) date = d.toISOString().split('T')[0]; } catch {}
       }
       break;
     }
   }
 
-  return { vendorName, amount, gstAmount, date };
+  return { vendorName, amount, gstAmount, date, vendorGSTIN: '' };
 }

@@ -1,14 +1,15 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { LayoutDashboard, Receipt, ScanLine, BarChart2, Settings, LogOut, Menu, X } from 'lucide-react';
+import { LayoutDashboard, Receipt, ScanLine, BarChart2, Settings, LogOut, Menu, X, RefreshCw } from 'lucide-react';
 import { useState } from 'react';
 
 const navItems = [
-  { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { path: '/expenses', label: 'Expenses', icon: Receipt },
-  { path: '/scanner', label: 'Scanner', icon: ScanLine },
-  { path: '/report', label: 'Reports', icon: BarChart2 },
-  { path: '/settings', label: 'Settings', icon: Settings },
+  { path: '/dashboard',  label: 'Dashboard',  icon: LayoutDashboard },
+  { path: '/expenses',   label: 'Expenses',   icon: Receipt },
+  { path: '/scanner',   label: 'Scanner',    icon: ScanLine },
+  { path: '/report',    label: 'Reports',    icon: BarChart2 },
+  { path: '/reconcile', label: 'Reconcile',  icon: RefreshCw },  // V2
+  { path: '/settings',  label: 'Settings',   icon: Settings },
 ];
 
 export default function Navbar() {

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Loader2, Zap } from 'lucide-react';
+import { X, Zap, ShieldCheck, ShieldX, ShieldAlert } from 'lucide-react';
 import { checkITCEligibility } from '../utils/itcRules';
 import ITCBadge from './ITCBadge';
 import axios from 'axios';
@@ -11,17 +11,23 @@ const CATEGORIES = [
 
 export default function AddExpenseModal({ onClose, onSave, prefill }) {
   const [form, setForm] = useState({
-    vendorName: prefill?.vendorName || '',
+    vendorName:  prefill?.vendorName  || '',
     description: prefill?.description || '',
-    amount: prefill?.amount || '',
-    gstPaid: prefill?.gstPaid || '',
-    category: prefill?.category || 'other',
+    amount:      prefill?.amount      || '',
+    gstPaid:     prefill?.gstPaid     || '',
+    category:    prefill?.category    || 'other',
     invoiceDate: prefill?.invoiceDate || new Date().toISOString().split('T')[0],
+    // V2 — vendor GSTIN field
+    vendorGstin: prefill?.vendorGstin || '',
   });
-  const [itcResult, setItcResult] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-  const [gstAutoCalc, setGstAutoCalc] = useState(!prefill?.gstPaid);
+  const [itcResult,    setItcResult]    = useState(null);
+  const [saving,       setSaving]       = useState(false);
+  const [error,        setError]        = useState('');
+  const [gstAutoCalc,  setGstAutoCalc]  = useState(!prefill?.gstPaid);
+
+  // V2 — GSTIN compliance check state
+  // null = not checked yet | 'loading' = API call in flight | object = result from server
+  const [gstinCheck, setGstinCheck] = useState(null);
 
   // Auto-calc GST (18%) when amount changes
   useEffect(() => {
@@ -31,7 +37,7 @@ export default function AddExpenseModal({ onClose, onSave, prefill }) {
     }
   }, [form.amount, gstAutoCalc]);
 
-  // Auto-check ITC
+  // Auto-check ITC eligibility when vendor name or category changes
   useEffect(() => {
     if (form.vendorName.length > 2) {
       const result = checkITCEligibility(form.vendorName, form.category);
@@ -44,7 +50,23 @@ export default function AddExpenseModal({ onClose, onSave, prefill }) {
   const handleChange = (e) => {
     const { name, value } = e.target;
     if (name === 'gstPaid') setGstAutoCalc(false);
+    // Reset GSTIN check result whenever the user edits the GSTIN field
+    if (name === 'vendorGstin') setGstinCheck(null);
     setForm(f => ({ ...f, [name]: value }));
+  };
+
+  // V2 — Triggered onBlur on the GSTIN input
+  // Calls the backend which hits the public GST portal
+  const checkVendorGSTIN = async (gstin) => {
+    const clean = gstin.trim().toUpperCase();
+    if (!clean || clean.length < 15) return; // Don't fire for obviously incomplete GSTINs
+    setGstinCheck('loading');
+    try {
+      const res = await axios.get(`/expenses/check-gstin/${clean}`);
+      setGstinCheck(res.data);
+    } catch {
+      setGstinCheck({ valid: false, active: null, message: '⚠️ Could not check GSTIN — try again later.' });
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -56,13 +78,23 @@ export default function AddExpenseModal({ onClose, onSave, prefill }) {
     setSaving(true);
     setError('');
     try {
+      // Determine vendorCompliant from the check result
+      let vendorCompliant = 'unknown';
+      if (gstinCheck && gstinCheck !== 'loading') {
+        if (gstinCheck.active === true)  vendorCompliant = 'yes';
+        if (gstinCheck.active === false) vendorCompliant = 'no';
+      }
+
       const payload = {
         ...form,
-        amount: parseFloat(form.amount),
-        gstPaid: parseFloat(form.gstPaid),
-        itcStatus: itcResult?.status || 'review',
-        itcReason: itcResult?.reason || 'Manually entered, needs review',
-        confidence: itcResult?.confidence || 'low',
+        amount:          parseFloat(form.amount),
+        gstPaid:         parseFloat(form.gstPaid),
+        itcStatus:       itcResult?.status     || 'review',
+        itcReason:       itcResult?.reason     || 'Manually entered, needs review',
+        confidence:      itcResult?.confidence || 'low',
+        // V2 additions
+        vendorGstin:     form.vendorGstin.trim().toUpperCase() || undefined,
+        vendorCompliant,
       };
       const res = await axios.post('/expenses', payload);
       onSave(res.data.expense);
@@ -75,9 +107,48 @@ export default function AddExpenseModal({ onClose, onSave, prefill }) {
   };
 
   const itcColors = {
-    claimable: { bg: 'rgba(0,212,170,0.08)', border: 'rgba(0,212,170,0.25)' },
-    not_claimable: { bg: 'rgba(255,77,77,0.08)', border: 'rgba(255,77,77,0.25)' },
-    review: { bg: 'rgba(245,166,35,0.08)', border: 'rgba(245,166,35,0.25)' },
+    claimable:     { bg: 'rgba(0,212,170,0.08)',  border: 'rgba(0,212,170,0.25)'  },
+    not_claimable: { bg: 'rgba(255,77,77,0.08)',  border: 'rgba(255,77,77,0.25)'  },
+    review:        { bg: 'rgba(245,166,35,0.08)', border: 'rgba(245,166,35,0.25)' },
+  };
+
+  // V2 — Render the GSTIN compliance result box
+  const renderGstinResult = () => {
+    if (!gstinCheck) return null;
+
+    if (gstinCheck === 'loading') {
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8,
+          padding: '8px 12px', borderRadius: 6, background: 'var(--bg-elevated)',
+          border: '1px solid var(--border)', fontSize: 12, color: 'var(--text-secondary)' }}>
+          <span className="spinner" style={{ width: 12, height: 12 }} />
+          Checking vendor compliance on GST portal...
+        </div>
+      );
+    }
+
+    const { active, message } = gstinCheck;
+    let bg, border, color, Icon;
+
+    if (active === true) {
+      bg = 'rgba(0,212,170,0.08)'; border = 'rgba(0,212,170,0.25)';
+      color = 'var(--accent-green)'; Icon = ShieldCheck;
+    } else if (active === false) {
+      bg = 'rgba(255,77,77,0.08)'; border = 'rgba(255,77,77,0.25)';
+      color = 'var(--accent-red)'; Icon = ShieldX;
+    } else {
+      bg = 'rgba(245,166,35,0.08)'; border = 'rgba(245,166,35,0.25)';
+      color = 'var(--accent-amber, #F5A623)'; Icon = ShieldAlert;
+    }
+
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8,
+        padding: '8px 12px', borderRadius: 6, background: bg,
+        border: `1px solid ${border}`, fontSize: 12, color, animation: 'fadeIn 0.2s ease' }}>
+        <Icon size={14} style={{ flexShrink: 0 }} />
+        <span>{message}</span>
+      </div>
+    );
   };
 
   return (
@@ -139,6 +210,22 @@ export default function AddExpenseModal({ onClose, onSave, prefill }) {
                   className="input-field" />
               </Field>
             </div>
+
+            {/* V2 — Vendor GSTIN field with live compliance check */}
+            <Field label="Vendor GSTIN (optional)">
+              <input
+                id="vendor-gstin"
+                name="vendorGstin"
+                value={form.vendorGstin}
+                onChange={handleChange}
+                onBlur={e => checkVendorGSTIN(e.target.value)}
+                placeholder="e.g. 27AAPFU0939F1ZV"
+                className="input-field"
+                maxLength={15}
+                style={{ textTransform: 'uppercase', letterSpacing: '0.05em' }}
+              />
+              {renderGstinResult()}
+            </Field>
           </div>
 
           {/* Total summary */}

@@ -2,21 +2,51 @@ import { useEffect, useState } from 'react';
 import Navbar from '../components/Navbar';
 import ITCBadge from '../components/ITCBadge';
 import AddExpenseModal from '../components/AddExpenseModal';
-import { Plus, Search, Filter, Trash2, ChevronDown, Download } from 'lucide-react';
+import { Plus, Search, Trash2, ShieldCheck, ShieldX, ShieldAlert } from 'lucide-react';
 import axios from 'axios';
 
 const CATEGORIES = ['all', 'internet', 'software', 'hardware', 'cloud', 'office', 'professional', 'marketing', 'travel', 'food', 'other'];
-const STATUSES = ['all', 'claimable', 'not_claimable', 'review'];
+const STATUSES   = ['all', 'claimable', 'not_claimable', 'review'];
+
+// V2 — Small shield icon shown next to the ITC badge in the table.
+// Communicates whether the vendor's GST registration was verified as active.
+function VendorComplianceBadge({ compliant }) {
+  if (!compliant || compliant === 'unknown') return null;
+
+  if (compliant === 'yes') {
+    return (
+      <span
+        title="Vendor GST verified active — your ITC is likely safe"
+        style={{ display: 'inline-flex', alignItems: 'center', marginLeft: 5, color: 'var(--accent-green)', verticalAlign: 'middle' }}
+      >
+        <ShieldCheck size={13} />
+      </span>
+    );
+  }
+
+  if (compliant === 'no') {
+    return (
+      <span
+        title="Vendor GST is inactive — this ITC may be rejected by the tax department"
+        style={{ display: 'inline-flex', alignItems: 'center', marginLeft: 5, color: 'var(--accent-red)', verticalAlign: 'middle' }}
+      >
+        <ShieldX size={13} />
+      </span>
+    );
+  }
+
+  return null;
+}
 
 export default function Expenses() {
-  const [expenses, setExpenses] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [showModal, setShowModal] = useState(false);
-  const [search, setSearch] = useState('');
-  const [filterStatus, setFilterStatus] = useState('all');
-  const [filterCategory, setFilterCategory] = useState('all');
-  const [filterMonth, setFilterMonth] = useState(new Date().toISOString().slice(0, 7));
-  const [deleting, setDeleting] = useState(null);
+  const [expenses,        setExpenses]        = useState([]);
+  const [loading,         setLoading]         = useState(true);
+  const [showModal,       setShowModal]       = useState(false);
+  const [search,          setSearch]          = useState('');
+  const [filterStatus,    setFilterStatus]    = useState('all');
+  const [filterCategory,  setFilterCategory]  = useState('all');
+  const [filterMonth,     setFilterMonth]     = useState(new Date().toISOString().slice(0, 7));
+  const [deleting,        setDeleting]        = useState(null);
 
   const fetchExpenses = async () => {
     setLoading(true);
@@ -49,19 +79,21 @@ export default function Expenses() {
     }
   };
 
-  const filtered = expenses.filter(e =>
+  const filtered   = expenses.filter(e =>
     e.vendorName?.toLowerCase().includes(search.toLowerCase()) ||
     e.description?.toLowerCase().includes(search.toLowerCase())
   );
+  const totalITC   = filtered.filter(e => e.itcStatus === 'claimable').reduce((s, e) => s + (e.gstPaid || 0), 0);
+  const totalGST   = filtered.reduce((s, e) => s + (e.gstPaid || 0), 0);
 
-  const totalITC = filtered.filter(e => e.itcStatus === 'claimable').reduce((s, e) => s + (e.gstPaid || 0), 0);
-  const totalGST = filtered.reduce((s, e) => s + (e.gstPaid || 0), 0);
+  // V2 — count at-risk expenses (ITC logged but vendor compliance failed)
+  const atRiskCount = filtered.filter(e => e.vendorCompliant === 'no').length;
 
-  // Generate month options
+  // Generate last 12 months for the month filter dropdown
   const monthOptions = [];
   const now = new Date();
   for (let i = 0; i < 12; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const d   = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const val = d.toISOString().slice(0, 7);
     const label = d.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
     monthOptions.push({ val, label });
@@ -86,10 +118,10 @@ export default function Expenses() {
         {/* Summary strip */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 20 }}>
           {[
-            { label: 'Total Expenses', value: filtered.length, unit: 'records' },
-            { label: 'Total GST Paid', value: `₹${totalGST.toLocaleString('en-IN')}`, color: 'var(--text-primary)' },
-            { label: 'ITC Claimable', value: `₹${totalITC.toLocaleString('en-IN')}`, color: 'var(--accent-green)' },
-            { label: 'Recovery Rate', value: totalGST > 0 ? `${Math.round((totalITC / totalGST) * 100)}%` : '—', color: 'var(--accent-green)' },
+            { label: 'Total Expenses',  value: filtered.length,                                                             unit: 'records' },
+            { label: 'Total GST Paid',  value: `₹${totalGST.toLocaleString('en-IN')}`,                                    color: 'var(--text-primary)' },
+            { label: 'ITC Claimable',   value: `₹${totalITC.toLocaleString('en-IN')}`,                                    color: 'var(--accent-green)' },
+            { label: 'Recovery Rate',   value: totalGST > 0 ? `${Math.round((totalITC / totalGST) * 100)}%` : '—',       color: 'var(--accent-green)' },
           ].map(s => (
             <div key={s.label} className="card" style={{ padding: '14px 16px' }}>
               <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>{s.label}</div>
@@ -97,6 +129,16 @@ export default function Expenses() {
             </div>
           ))}
         </div>
+
+        {/* V2 — At-risk warning banner (vendor GST inactive) */}
+        {atRiskCount > 0 && (
+          <div style={{ marginBottom: 16, padding: '10px 16px', borderRadius: 8, background: 'rgba(255,77,77,0.07)', border: '1px solid rgba(255,77,77,0.2)', fontSize: 13, color: 'var(--accent-red)', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <ShieldX size={15} style={{ flexShrink: 0 }} />
+            <span>
+              <strong>{atRiskCount} expense{atRiskCount > 1 ? 's' : ''}</strong> flagged — vendor GST is inactive. The tax department may reject this ITC. Consult your CA.
+            </span>
+          </div>
+        )}
 
         {/* Filters */}
         <div className="card" style={{ marginBottom: 16, padding: 16 }}>
@@ -113,7 +155,7 @@ export default function Expenses() {
             </div>
 
             {/* Month filter */}
-            <div style={{ position: 'relative' }}>
+            <div>
               <select id="filter-month" value={filterMonth} onChange={e => setFilterMonth(e.target.value)} className="input-field" style={{ paddingRight: 32, minWidth: 160 }}>
                 {monthOptions.map(m => <option key={m.val} value={m.val}>{m.label}</option>)}
               </select>
@@ -172,26 +214,46 @@ export default function Expenses() {
                       <td style={{ fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                         {new Date(expense.invoiceDate || expense.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
                       </td>
+
                       <td>
                         <div style={{ fontWeight: 500, fontSize: 13 }}>{expense.vendorName}</div>
                         {expense.description && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{expense.description}</div>}
+                        {/* V2 — Show GSTIN in small text if it was captured */}
+                        {expense.vendorGstin && (
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'monospace', marginTop: 2 }}>
+                            GSTIN: {expense.vendorGstin}
+                          </div>
+                        )}
                       </td>
+
                       <td>
                         <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 100, background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}>
                           {expense.category}
                         </span>
                       </td>
-                      <td style={{ fontFamily: 'JetBrains Mono', fontSize: 13, whiteSpace: 'nowrap' }}>₹{Number(expense.amount).toLocaleString('en-IN')}</td>
-                      <td style={{
-                        fontFamily: 'JetBrains Mono', fontSize: 13, whiteSpace: 'nowrap',
-                        color: expense.itcStatus === 'claimable' ? 'var(--accent-green)' : 'var(--text-secondary)'
-                      }}>₹{Number(expense.gstPaid).toLocaleString('en-IN')}</td>
-                      <td><ITCBadge status={expense.itcStatus} /></td>
+
+                      <td style={{ fontFamily: 'JetBrains Mono', fontSize: 13, whiteSpace: 'nowrap' }}>
+                        ₹{Number(expense.amount).toLocaleString('en-IN')}
+                      </td>
+
+                      <td style={{ fontFamily: 'JetBrains Mono', fontSize: 13, whiteSpace: 'nowrap', color: expense.itcStatus === 'claimable' ? 'var(--accent-green)' : 'var(--text-secondary)' }}>
+                        ₹{Number(expense.gstPaid).toLocaleString('en-IN')}
+                      </td>
+
+                      {/* V2 — ITC badge + vendor compliance shield side by side */}
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <ITCBadge status={expense.itcStatus} />
+                          <VendorComplianceBadge compliant={expense.vendorCompliant} />
+                        </div>
+                      </td>
+
                       <td style={{ fontSize: 11, color: 'var(--text-muted)', maxWidth: 200 }}>
                         <span title={expense.itcReason} style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                           {expense.itcReason}
                         </span>
                       </td>
+
                       <td>
                         <button
                           id={`delete-expense-${expense._id}`}
@@ -212,7 +274,7 @@ export default function Expenses() {
           )}
         </div>
 
-        {/* ITC tip */}
+        {/* Review tip */}
         {filtered.some(e => e.itcStatus === 'review') && (
           <div style={{ marginTop: 16, padding: '12px 16px', borderRadius: 8, background: 'rgba(245,166,35,0.07)', border: '1px solid rgba(245,166,35,0.2)', fontSize: 13, color: 'var(--text-secondary)' }}>
             ⚠️ You have {filtered.filter(e => e.itcStatus === 'review').length} expense(s) that need review. These could be partially claimable — consult your CA.

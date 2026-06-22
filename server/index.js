@@ -1,8 +1,11 @@
 require('dotenv').config();
-const express = require('express');
+const express  = require('express');
 const mongoose = require('mongoose');
-const cors = require('cors');
-const path = require('path');
+const cors     = require('cors');
+const path     = require('path');
+
+// V2 — Email reminder cron (fires 13th & 18th at 9 AM IST)
+const { startReminderCron } = require('./services/reminderCron');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -45,7 +48,10 @@ app.use((err, req, res, next) => {
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/itclaim')
   .then(async () => {
     console.log('✅ MongoDB connected');
-    
+
+    // V2 — Start the GST deadline email reminder cron job
+    startReminderCron();
+
     // Seed demo user if no users exist
     try {
       const User = require('./models/User');
