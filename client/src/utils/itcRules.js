@@ -147,6 +147,12 @@ const ITC_RULES = {
       reason: 'Personal travel bookings are not claimable business expenses',
       confidence: 'high',
     },
+    // V2 additions — personal care and cosmetics
+    {
+      keywords: ['soap', 'shampoo', 'conditioner', 'lotion', 'cream', 'cosmetic', 'makeup', 'perfume', 'deodorant', 'toothpaste', 'toothbrush', 'facewash', 'face wash'],
+      reason: 'Personal care items and cosmetics are blocked from ITC claims',
+      confidence: 'high',
+    },
   ],
   review: [
     {
