@@ -260,11 +260,11 @@ export default function Scanner() {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                   <Field label="Amount (₹) *">
                     <input id="scanner-amount" name="amount" type="number" value={form.amount}
-                      onChange={handleFormChange} placeholder="5000" className="input-field" />
+                      onChange={handleFormChange} placeholder="e.g. 5000" className="input-field" />
                   </Field>
                   <Field label="GST Paid (₹)">
                     <input id="scanner-gst" name="gstPaid" type="number" value={form.gstPaid}
-                      onChange={handleFormChange} placeholder="900" className="input-field" />
+                      onChange={handleFormChange} placeholder="e.g. 900" className="input-field" />
                   </Field>
                 </div>
 
