@@ -189,12 +189,26 @@ const ITC_RULES = {
 };
 
 export function checkITCEligibility(expenseName, category = '') {
-  // V2: Normalize input to strip spaces, hyphens, underscores, dots before matching
-  // This fixes: "JioFiber" matching "jio fiber", "wi-fi" matching "wifi", etc.
-  const lowerNorm = normalize(expenseName + ' ' + category);
+  // Normalize by making lowercase and replacing hyphens/underscores with spaces
+  const text = (expenseName + ' ' + category).toLowerCase().replace(/[\-_.]/g, ' ');
+
+  // Helper to check if a keyword exists in the text as a distinct word
+  // (We strip spaces from the keyword itself just in case it's a multi-word like "jio fiber")
+  const matchesKeyword = (keyword) => {
+    const k = keyword.toLowerCase();
+    // If it's a short generic word like 'pen' or 'ink', enforce strict word boundaries
+    if (k.length <= 4) {
+      return new RegExp(`\\b${k}\\b`).test(text);
+    }
+    // For longer words or multi-word phrases, strip spaces from both and do a fuzzy include
+    // to handle "jio fiber" matching "jiofiber"
+    const textNoSpaces = text.replace(/\s+/g, '');
+    const kNoSpaces = k.replace(/\s+/g, '');
+    return textNoSpaces.includes(kNoSpaces);
+  };
 
   for (const rule of ITC_RULES.claimable) {
-    if (rule.keywords.some(k => lowerNorm.includes(normalize(k)))) {
+    if (rule.keywords.some(matchesKeyword)) {
       return {
         claimable: true,
         status: 'claimable',
@@ -205,7 +219,7 @@ export function checkITCEligibility(expenseName, category = '') {
   }
 
   for (const rule of ITC_RULES.notClaimable) {
-    if (rule.keywords.some(k => lowerNorm.includes(normalize(k)))) {
+    if (rule.keywords.some(matchesKeyword)) {
       return {
         claimable: false,
         status: 'not_claimable',
@@ -216,7 +230,7 @@ export function checkITCEligibility(expenseName, category = '') {
   }
 
   for (const rule of ITC_RULES.review) {
-    if (rule.keywords.some(k => lowerNorm.includes(normalize(k)))) {
+    if (rule.keywords.some(matchesKeyword)) {
       // V2: Category-based confidence boosting
       // If category is 'internet' and we only got a 'review' hit, upgrade to claimable
       if (category && category.toLowerCase() === 'internet') {
