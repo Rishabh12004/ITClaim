@@ -15,7 +15,9 @@ function parseGSTR2B(jsonData) {
       const vendorGstin = supplier.ctin;
       for (const inv of (supplier.inv || [])) {
         const totalITC = (inv.itms || []).reduce((sum, item) => {
-          return sum + (item.itamt || 0) + (item.camt || 0) + (item.samt || 0);
+          const det = item.itm_det || {};
+          // In GSTR-2B JSON, tax amounts are inside itm_det: iamt (IGST), camt (CGST), samt (SGST)
+          return sum + (det.iamt || 0) + (det.camt || 0) + (det.samt || 0) + (item.itamt || 0) + (item.camt || 0) + (item.samt || 0);
         }, 0);
         entries.push({
           vendorGstin,
